@@ -33,12 +33,12 @@ impl From<S3ReaderError> for std::io::Error {
 }
 
 /// The URI of an S3 object
-pub struct S3ObjectUri<'a> {
-    bucket: &'a str,
-    key: &'a str,
+pub struct S3ObjectUri {
+    bucket: String,
+    key: String,
 }
 
-impl<'a> S3ObjectUri<'_> {
+impl S3ObjectUri {
     /// Returns an `S3ObjectUri` for the provided S3 URI
     ///
     /// # Example
@@ -50,14 +50,14 @@ impl<'a> S3ObjectUri<'_> {
     /// assert_eq!(uri.bucket() , "mybucket");
     /// assert_eq!(uri.key() , "path/to/file.xls");
     /// ```
-    pub fn new(uri: &'a str) -> Result<S3ObjectUri, S3ReaderError> {
+    pub fn new(uri: & str) -> Result<S3ObjectUri, S3ReaderError> {
         if &uri[0..5] != "s3://" {
             return Err(S3ReaderError::MissingS3Protocol);
         }
         if let Some(idx) = uri[5..].find(&['/']) {
             Ok(S3ObjectUri {
-                bucket: &uri[5..idx + 5],
-                key: &uri[idx + 6..],
+                bucket: uri[5..idx + 5].to_string(),
+                key: uri[idx + 6..].to_string(),
             })
         } else {
             Err(S3ReaderError::MissingObjectUri)
@@ -74,7 +74,7 @@ impl<'a> S3ObjectUri<'_> {
     /// assert_eq!(uri.bucket() , "mybucket");
     /// ```
     pub fn bucket(&self) -> &str {
-        self.bucket
+        &self.bucket
     }
 
     /// Returns the object's key
@@ -87,7 +87,7 @@ impl<'a> S3ObjectUri<'_> {
     /// assert_eq!(uri.key() , "path/to/file.xls");
     /// ```
     pub fn key(&self) -> &str {
-        self.key
+        &self.key
     }
 }
 
@@ -113,7 +113,7 @@ const DEFAULT_READ_SIZE: usize = 1024 * 1024; // 1 MB
 /// ```
 pub struct S3Reader<'a> {
     client: aws_sdk_s3::Client,
-    uri: &'a S3ObjectUri<'a>, //&'a str,
+    uri: &'a S3ObjectUri, //&'a str,
     pos: u64,
     header: Option<HeadObjectOutput>,
 }
