@@ -119,7 +119,7 @@ pub struct S3Reader {
     header: Option<HeadObjectOutput>,
 }
 
-impl<'a> S3Reader{
+impl S3Reader {
     /// Creates a new `S3Reader`.
     ///
     /// This method does not check for presence of an actual object in S3 or for connectivity.
@@ -148,10 +148,7 @@ impl<'a> S3Reader{
     ///
     /// This method is useful if you don't want to use the default configbuilder using the environment.
     /// It does not check for correctness, connectivity to the S3 bucket or presence of the S3 object.
-    pub fn from_config(
-        config: &aws_types::sdk_config::SdkConfig,
-        uri: S3ObjectUri,
-    ) -> S3Reader {
+    pub fn from_config(config: &aws_types::sdk_config::SdkConfig, uri: S3ObjectUri) -> S3Reader {
         let client = aws_sdk_s3::Client::new(config);
         S3Reader {
             client,
