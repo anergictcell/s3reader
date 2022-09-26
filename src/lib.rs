@@ -33,6 +33,7 @@ impl From<S3ReaderError> for std::io::Error {
 }
 
 /// The URI of an S3 object
+#[derive(Clone, Debug)]
 pub struct S3ObjectUri {
     bucket: String,
     key: String,
@@ -50,7 +51,7 @@ impl S3ObjectUri {
     /// assert_eq!(uri.bucket() , "mybucket");
     /// assert_eq!(uri.key() , "path/to/file.xls");
     /// ```
-    pub fn new(uri: & str) -> Result<S3ObjectUri, S3ReaderError> {
+    pub fn new(uri: &str) -> Result<S3ObjectUri, S3ReaderError> {
         if &uri[0..5] != "s3://" {
             return Err(S3ReaderError::MissingS3Protocol);
         }
@@ -104,26 +105,26 @@ const DEFAULT_READ_SIZE: usize = 1024 * 1024; // 1 MB
 /// use s3reader::S3ObjectUri;
 ///
 /// let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-/// let mut reader = S3Reader::open(&uri).unwrap();
+/// let mut reader = S3Reader::open(uri).unwrap();
 ///
 /// reader.seek(std::io::SeekFrom::Start(100)).unwrap();
 ///
 /// let mut buf: Vec<u8> = [0; 1024].to_vec();
 /// reader.read(&mut buf).expect("Error reading from S3");
 /// ```
-pub struct S3Reader<'a> {
+pub struct S3Reader {
     client: aws_sdk_s3::Client,
-    uri: &'a S3ObjectUri, //&'a str,
+    uri: S3ObjectUri,
     pos: u64,
     header: Option<HeadObjectOutput>,
 }
 
-impl<'a> S3Reader<'a> {
+impl<'a> S3Reader{
     /// Creates a new `S3Reader`.
     ///
     /// This method does not check for presence of an actual object in S3 or for connectivity.
     /// Use [`S3Reader::open`] instead to ensure that the S3 object actually exists.
-    pub fn new(uri: &'a S3ObjectUri) -> S3Reader<'a> {
+    pub fn new(uri: S3ObjectUri) -> S3Reader {
         let config = Runtime::new()
             .unwrap()
             .block_on(aws_config::load_from_env());
@@ -135,7 +136,7 @@ impl<'a> S3Reader<'a> {
     /// This method is the preferred way to create a Reader. It has a minor overhead
     /// because it fetches the object's header from S3, but this ensures that the
     /// object is actually available and thus prevents possible runtime errors.
-    pub fn open(uri: &'a S3ObjectUri) -> Result<S3Reader<'a>, S3ReaderError> {
+    pub fn open(uri: S3ObjectUri) -> Result<S3Reader, S3ReaderError> {
         let mut reader = S3Reader::new(uri);
         match Runtime::new().unwrap().block_on(reader.fetch_header()) {
             Err(err) => Err(S3ReaderError::ObjectNotFetched(err.to_string())),
@@ -149,8 +150,8 @@ impl<'a> S3Reader<'a> {
     /// It does not check for correctness, connectivity to the S3 bucket or presence of the S3 object.
     pub fn from_config(
         config: &aws_types::sdk_config::SdkConfig,
-        uri: &'a S3ObjectUri,
-    ) -> S3Reader<'a> {
+        uri: S3ObjectUri,
+    ) -> S3Reader {
         let client = aws_sdk_s3::Client::new(config);
         S3Reader {
             client,
@@ -170,7 +171,7 @@ impl<'a> S3Reader<'a> {
     /// use s3reader::S3ObjectUri;
     ///
     /// let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-    /// let mut reader = S3Reader::open(&uri).unwrap();
+    /// let mut reader = S3Reader::open(uri).unwrap();
     ///
     /// // `read_range` is an async function, we must wrap it in a runtime in the doctest
     /// let bytes = Runtime::new().unwrap().block_on(
@@ -215,7 +216,7 @@ impl<'a> S3Reader<'a> {
     /// use s3reader::S3ObjectUri;
     ///
     /// let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-    /// let mut reader = S3Reader::open(&uri).unwrap();
+    /// let mut reader = S3Reader::open(uri).unwrap();
     ///
     /// // `fetch_header` is an async function, we must wrap it in a runtime in the doctest
     /// Runtime::new().unwrap().block_on(
@@ -256,7 +257,7 @@ impl<'a> S3Reader<'a> {
     }
 }
 
-impl Read for S3Reader<'_> {
+impl Read for S3Reader {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         let len = std::cmp::min(buf.len(), DEFAULT_READ_SIZE);
         let s3_data = Runtime::new()
@@ -267,7 +268,7 @@ impl Read for S3Reader<'_> {
     }
 }
 
-impl Seek for S3Reader<'_> {
+impl Seek for S3Reader {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, std::io::Error> {
         match pos {
             SeekFrom::Start(x) => self.pos = x,

@@ -24,7 +24,7 @@ use s3reader::S3ObjectUri;
 
 fn read_lines_manually() -> std::io::Result<()> {
     let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-    let s3obj = S3Reader::open(&uri).unwrap();
+    let s3obj = S3Reader::open(uri).unwrap();
 
     let mut reader = BufReader::new(s3obj);
 
@@ -41,7 +41,7 @@ fn read_lines_manually() -> std::io::Result<()> {
 
 fn use_line_iterator() -> std::io::Result<()> {
     let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-    let s3obj = S3Reader::open(&uri).unwrap();
+    let s3obj = S3Reader::open(uri).unwrap();
 
     let reader = BufReader::new(s3obj);
 
@@ -64,7 +64,7 @@ use s3reader::S3ObjectUri;
 
 fn jump_within_file() -> std::io::Result<()> {
     let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
-    let mut reader = S3Reader::open(&uri).unwrap();
+    let mut reader = S3Reader::open(uri).unwrap();
 
     let len = reader.len();
 
