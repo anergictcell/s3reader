@@ -1,8 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-use log::{debug, error};
 use aws_sdk_s3::output::HeadObjectOutput;
 use bytes::Buf;
+use log::{debug, error};
 use std::io::{Read, Seek, SeekFrom};
 use thiserror::Error;
 use tokio::runtime::Runtime;
@@ -92,7 +92,6 @@ impl S3ObjectUri {
         &self.key
     }
 }
-
 
 /// A Reader for S3 objects that implements the `Read` and `Seek` traits
 ///
@@ -262,7 +261,7 @@ impl S3Reader {
 impl Read for S3Reader {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         if self.pos >= self.len() {
-            return Ok(0)
+            return Ok(0);
         }
         let s3_data = Runtime::new()
             .unwrap()
@@ -301,8 +300,8 @@ impl Read for S3Reader {
                     buf.push(byte.into());
                 }
                 Ok(n)
-            },
-            Err(err) => Err(err)
+            }
+            Err(err) => Err(err),
         }
     }
 }
@@ -311,11 +310,14 @@ impl Seek for S3Reader {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, std::io::Error> {
         match pos {
             SeekFrom::Start(x) => self.pos = x,
-            SeekFrom::Current(x) => self.pos = self.pos + x as u64,
+            SeekFrom::Current(x) => self.pos += x as u64,
             SeekFrom::End(x) => self.pos = self.len() + x as u64,
         };
         if self.pos < 1 || self.pos > self.len() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "cannot seek out of bounds"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "cannot seek out of bounds",
+            ));
         }
         Ok(self.pos)
     }
