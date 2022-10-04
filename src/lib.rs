@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+use log::{debug, error};
 use aws_sdk_s3::output::HeadObjectOutput;
 use bytes::Buf;
 use std::io::{Read, Seek, SeekFrom};
@@ -92,7 +93,6 @@ impl S3ObjectUri {
     }
 }
 
-const DEFAULT_READ_SIZE: usize = 1024 * 1024; // 1 MB
 
 /// A Reader for S3 objects that implements the `Read` and `Seek` traits
 ///
@@ -181,6 +181,7 @@ impl S3Reader {
         from: u64,
         to: u64,
     ) -> Result<aws_sdk_s3::types::AggregatedBytes, S3ReaderError> {
+        debug!("Reading range {}-{}", from, to);
         if to < from {
             return Err(S3ReaderError::InvalidRange(from, to));
         }
@@ -241,9 +242,9 @@ impl S3Reader {
     /// This method can panic if the header cannot be fetched (e.g. due to network issues, wrong URI etc).
     /// This can be prevented by using [`S3Reader::open`] which guarantees that the header is present.
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&mut self) -> i64 {
+    pub fn len(&mut self) -> u64 {
         if let Some(header) = &self.header {
-            header.content_length()
+            header.content_length() as u64
         } else {
             Runtime::new()
                 .unwrap()
@@ -252,16 +253,57 @@ impl S3Reader {
             self.len()
         }
     }
+
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
 }
 
 impl Read for S3Reader {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        let len = std::cmp::min(buf.len(), DEFAULT_READ_SIZE);
+        if self.pos >= self.len() {
+            return Ok(0)
+        }
         let s3_data = Runtime::new()
             .unwrap()
-            .block_on(self.read_range(self.pos, self.pos + len as u64 - 1))?;
+            .block_on(self.read_range(self.pos, self.pos + buf.len() as u64))?;
         let mut reader = s3_data.reader();
         reader.read(buf)
+    }
+
+    /// Custom implementation to avoid too many `read` calls. The default trait
+    /// reads in 32 bytes blocks that grow over time. However, the IO for S3 has way
+    /// more latency so `S3Reader` tries to fetch all data in a single call
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> Result<usize, std::io::Error> {
+        let reader_len = self.len();
+        let s3_data = Runtime::new()
+            .unwrap()
+            .block_on(self.read_range(self.pos, reader_len))?;
+
+        let data_len = s3_data.remaining();
+
+        buf.reserve(data_len);
+        for b in s3_data.into_bytes() {
+            buf.push(b);
+        }
+        Ok(data_len)
+    }
+
+    /// Custom implementation to avoid too many `read` calls. The default trait
+    /// reads in 32 bytes blocks that grow over time. However, the IO for S3 has way
+    /// more latency so `S3Reader` tries to fetch all data in a single call
+    fn read_to_string(&mut self, buf: &mut String) -> Result<usize, std::io::Error> {
+        let mut bytes = Vec::new();
+        match self.read_to_end(&mut bytes) {
+            Ok(n) => {
+                buf.reserve(n);
+                for byte in bytes {
+                    buf.push(byte.into());
+                }
+                Ok(n)
+            },
+            Err(err) => Err(err)
+        }
     }
 }
 
@@ -269,8 +311,11 @@ impl Seek for S3Reader {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, std::io::Error> {
         match pos {
             SeekFrom::Start(x) => self.pos = x,
-            SeekFrom::Current(x) => self.pos = (self.pos as i64 + x) as u64,
-            SeekFrom::End(x) => self.pos = (self.len() + x) as u64,
+            SeekFrom::Current(x) => self.pos = self.pos + x as u64,
+            SeekFrom::End(x) => self.pos = self.len() + x as u64,
+        };
+        if self.pos < 1 || self.pos > self.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "cannot seek out of bounds"));
         }
         Ok(self.pos)
     }
