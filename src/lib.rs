@@ -308,17 +308,108 @@ impl Read for S3Reader {
 
 impl Seek for S3Reader {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, std::io::Error> {
-        match pos {
-            SeekFrom::Start(x) => self.pos = x,
-            SeekFrom::Current(x) => self.pos += x as u64,
-            SeekFrom::End(x) => self.pos = self.len() + x as u64,
-        };
-        if self.pos < 1 || self.pos > self.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "cannot seek out of bounds",
-            ));
+        match s3reader_seek(self.len(), self.pos, pos) {
+            Ok(x) => {
+                self.pos = x;
+                Ok(x)
+            },
+            Err(err) => Err(err)
         }
-        Ok(self.pos)
+    }
+}
+
+
+/// Calculates the new cursor for a `Seek` operation
+///
+/// This function is declared outside of `S3Reader` so that it can be
+/// unit-tested.
+fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::Error> {
+    match pos {
+        SeekFrom::Start(x) => {
+            if x > len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "cannot seek out of bounds",
+                ));
+
+            }
+            return Ok(x);
+        }
+        SeekFrom::Current(x) => match x >= 0 {
+            true => {
+                // we can safely cast this to u64, positive i64 will always be smaller
+                let x = x as u64;
+                if (x + cursor) > len {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "cannot seek out of bounds",
+                    ));
+                }
+                return Ok(cursor + x);
+            },
+            false => {
+                // we can safely cast this to u64, since abs i64 will always be smaller than u64
+                let x = x.abs() as u64;
+                if x > cursor {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "position cannot be negative",
+                    ));
+                }
+                return Ok(cursor - x);
+            }
+        }
+        SeekFrom::End(x) => {
+            if x > 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "cannot seek out of bounds",
+                ));
+            }
+            // we can safely cast this to u64, since abs i64 will always be smaller than u64
+            let x = x.abs() as u64;
+            if x > len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "position cannot be negative",
+                ));
+            };
+            return Ok(len - x as u64);
+        }
+    };
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_absolute_position() {
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(30)).unwrap(), 30);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(0)).unwrap(), 0);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(100)).unwrap(), 100);
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::Start(101)).is_err());
+    }
+
+    #[test]
+    fn test_relative_position() {
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(30)).unwrap(), 31);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(99)).unwrap(), 100);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(0)).unwrap(), 1);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(-1)).unwrap(), 0);
+        assert_eq!(s3reader_seek(100, 0, std::io::SeekFrom::Current(0)).unwrap(), 0);
+        assert_eq!(s3reader_seek(100, 0, std::io::SeekFrom::Current(1)).unwrap(), 1);
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(-2)).is_err());
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(100)).is_err());
+    }
+
+    #[test]
+    fn test_seek_from_end() {
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(1)).is_err());
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(-101)).is_err());
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(0)).unwrap(), 100);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(-100)).unwrap(), 0);
+        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(-50)).unwrap(), 50);
     }
 }
