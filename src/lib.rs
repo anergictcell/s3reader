@@ -159,6 +159,9 @@ impl S3Reader {
 
     /// Returns the bytes read from the S3 object for the specified byte-range
     ///
+    /// This method does not update the internal cursor position. To maintain
+    /// an internal state, use [`S3Reader::seek`] and [`S3Reader::read`] instead.
+    ///
     /// # Example
     /// ```no_run
     /// use tokio::runtime::Runtime;
@@ -180,10 +183,10 @@ impl S3Reader {
         from: u64,
         to: u64,
     ) -> Result<aws_sdk_s3::types::AggregatedBytes, S3ReaderError> {
-        debug!("Reading range {}-{}", from, to);
-        if to < from {
+        if to < from || from > self.len() {
             return Err(S3ReaderError::InvalidRange(from, to));
         }
+        debug!("Reading range {}-{}", from, to);
         let object_output = self
             .client
             .get_object()
@@ -194,11 +197,7 @@ impl S3Reader {
             .await?;
 
         match object_output.body.collect().await {
-            Ok(x) => {
-                // update cursor
-                self.pos = to;
-                Ok(x)
-            }
+            Ok(x) => Ok(x),
             Err(_) => Err(S3ReaderError::InvalidContent),
         }
     }
@@ -263,9 +262,11 @@ impl Read for S3Reader {
         if self.pos >= self.len() {
             return Ok(0);
         }
+        let end_pos = self.pos + buf.len() as u64;
         let s3_data = Runtime::new()
             .unwrap()
-            .block_on(self.read_range(self.pos, self.pos + buf.len() as u64))?;
+            .block_on(self.read_range(self.pos, end_pos))?;
+        self.pos = end_pos;
         let mut reader = s3_data.reader();
         reader.read(buf)
     }
@@ -279,6 +280,7 @@ impl Read for S3Reader {
             .unwrap()
             .block_on(self.read_range(self.pos, reader_len))?;
 
+        self.pos = reader_len;
         let data_len = s3_data.remaining();
 
         buf.reserve(data_len);
@@ -312,12 +314,11 @@ impl Seek for S3Reader {
             Ok(x) => {
                 self.pos = x;
                 Ok(x)
-            },
-            Err(err) => Err(err)
+            }
+            Err(err) => Err(err),
         }
     }
 }
-
 
 /// Calculates the new cursor for a `Seek` operation
 ///
@@ -331,9 +332,8 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
                     std::io::ErrorKind::Other,
                     "cannot seek out of bounds",
                 ));
-
             }
-            return Ok(x);
+            Ok(x)
         }
         SeekFrom::Current(x) => match x >= 0 {
             true => {
@@ -345,20 +345,20 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
                         "cannot seek out of bounds",
                     ));
                 }
-                return Ok(cursor + x);
-            },
+                Ok(cursor + x)
+            }
             false => {
                 // we can safely cast this to u64, since abs i64 will always be smaller than u64
-                let x = x.abs() as u64;
+                let x = x.unsigned_abs();
                 if x > cursor {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "position cannot be negative",
                     ));
                 }
-                return Ok(cursor - x);
+                Ok(cursor - x)
             }
-        }
+        },
         SeekFrom::End(x) => {
             if x > 0 {
                 return Err(std::io::Error::new(
@@ -367,18 +367,17 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
                 ));
             }
             // we can safely cast this to u64, since abs i64 will always be smaller than u64
-            let x = x.abs() as u64;
+            let x = x.unsigned_abs();
             if x > len {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "position cannot be negative",
                 ));
             };
-            return Ok(len - x as u64);
+            Ok(len - x as u64)
         }
-    };
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -386,20 +385,47 @@ mod tests {
 
     #[test]
     fn test_absolute_position() {
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(30)).unwrap(), 30);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(0)).unwrap(), 0);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Start(100)).unwrap(), 100);
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Start(30)).unwrap(),
+            30
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Start(0)).unwrap(),
+            0
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Start(100)).unwrap(),
+            100
+        );
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::Start(101)).is_err());
     }
 
     #[test]
     fn test_relative_position() {
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(30)).unwrap(), 31);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(99)).unwrap(), 100);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(0)).unwrap(), 1);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::Current(-1)).unwrap(), 0);
-        assert_eq!(s3reader_seek(100, 0, std::io::SeekFrom::Current(0)).unwrap(), 0);
-        assert_eq!(s3reader_seek(100, 0, std::io::SeekFrom::Current(1)).unwrap(), 1);
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Current(30)).unwrap(),
+            31
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Current(99)).unwrap(),
+            100
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Current(0)).unwrap(),
+            1
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Current(-1)).unwrap(),
+            0
+        );
+        assert_eq!(
+            s3reader_seek(100, 0, std::io::SeekFrom::Current(0)).unwrap(),
+            0
+        );
+        assert_eq!(
+            s3reader_seek(100, 0, std::io::SeekFrom::Current(1)).unwrap(),
+            1
+        );
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(-2)).is_err());
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(100)).is_err());
     }
@@ -408,8 +434,17 @@ mod tests {
     fn test_seek_from_end() {
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(1)).is_err());
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(-101)).is_err());
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(0)).unwrap(), 100);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(-100)).unwrap(), 0);
-        assert_eq!(s3reader_seek(100, 1, std::io::SeekFrom::End(-50)).unwrap(), 50);
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::End(0)).unwrap(),
+            100
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::End(-100)).unwrap(),
+            0
+        );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::End(-50)).unwrap(),
+            50
+        );
     }
 }
