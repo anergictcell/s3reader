@@ -1,5 +1,5 @@
 [![Build](https://github.com/anergictcell/s3reader/actions/workflows/build.yml/badge.svg)](https://github.com/anergictcell/s3reader/actions/workflows/build.yml)
-[![crates.io](https://img.shields.io/crates/v/s3reader?color=#3fb911)](https://crates.io/crates/atg)
+[![crates.io](https://img.shields.io/crates/v/s3reader?color=#3fb911)](https://crates.io/crates/s3reader)
 [![doc-rs](https://img.shields.io/docsrs/s3reader/latest)](https://docs.rs/s3reader/latest/s3reader/)
 
 # S3Reader
@@ -11,7 +11,7 @@ Add this to your `Cargo.toml`:
 
 ```text
 [dependencies]
-s3reader = "0.1.0"
+s3reader = "0.5.0"
 ```
 
 ### Use `BufRead` to read line by line
@@ -84,11 +84,11 @@ fn jump_within_file() -> std::io::Result<()> {
 
 
 ## Q/A
-Does this library really provide random access to S3 objects?
-:   According to this [StackOverflow answer](https://stackoverflow.com/questions/60176997/does-aws-s3-getobject-provide-random-access), yes.
+**Does this library really provide random access to S3 objects?**  
+According to this [StackOverflow answer](https://stackoverflow.com/questions/60176997/does-aws-s3-getobject-provide-random-access), yes.
 
-Are the reads sync or async?
-:   The S3-SDK uses mostly async operations, but the `Read` and `Seek` traits require sync methods. Due to this, I'm using a blocking tokio runtime to wrap the async calls. This might not be the best solution, but works well for me. Any improvement suggestions are very welcome
+**Are the reads sync or async?**  
+The S3-SDK uses mostly async operations, but the `Read` and `Seek` traits require sync methods. Due to this, I'm using a blocking tokio runtime to wrap the async calls. This might not be the best solution, but works well for me. Any improvement suggestions are very welcome
 
-Why is this useful?
-:   Depends on your use-cases. If you need to access random bytes in the middle of large files/S3 object, this library is useful. For example, you can read it to stream mp4 files. It's also quite useful for some bioinformatic applications, where you might have a huge, several GB reference genome, but only need to access data of a few genes, accounting to only a few MB.
+**Why is this useful?**  
+Depends on your use-cases. If you need to access random bytes in the middle of large files/S3 object, this library is useful. For example, you can read it to stream mp4 files. It's also quite useful for some bioinformatic applications, where you might have a huge, several GB reference genome, but only need to access data of a few genes, accounting to only a few MB.
