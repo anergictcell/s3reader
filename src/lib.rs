@@ -2,7 +2,6 @@
 
 use aws_sdk_s3::output::HeadObjectOutput;
 use bytes::Buf;
-use log::{debug, error};
 use std::io::{Read, Seek, SeekFrom};
 use thiserror::Error;
 use tokio::runtime::Runtime;
@@ -186,7 +185,6 @@ impl S3Reader {
         if to < from || from > self.len() {
             return Err(S3ReaderError::InvalidRange(from, to));
         }
-        debug!("Reading range {}-{}", from, to);
         let object_output = self
             .client
             .get_object()
