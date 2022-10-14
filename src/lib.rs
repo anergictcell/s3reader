@@ -156,10 +156,12 @@ impl S3Reader {
         }
     }
 
-    /// Returns the bytes read from the S3 object for the specified byte-range
+    /// Returns A Future for the bytes read from the S3 object for the specified byte-range
     ///
     /// This method does not update the internal cursor position. To maintain
     /// an internal state, use [`S3Reader::seek`] and [`S3Reader::read`] instead.
+    ///
+    /// The byte ranges `from` and `to` are both inclusive, see <https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35>
     ///
     /// # Example
     /// ```no_run
@@ -173,7 +175,7 @@ impl S3Reader {
     ///
     /// // `read_range` is an async function, we must wrap it in a runtime in the doctest
     /// let bytes = Runtime::new().unwrap().block_on(
-    ///     reader.read_range(100, 250)
+    ///     reader.read_range(100, 249)
     /// ).unwrap().into_bytes();
     /// assert_eq!(bytes.len(), 150);
     /// ```
@@ -198,6 +200,34 @@ impl S3Reader {
             Ok(x) => Ok(x),
             Err(_) => Err(S3ReaderError::InvalidContent),
         }
+    }
+
+    /// Returns the bytes read from the S3 object for the specified byte-range
+    ///
+    /// This method does not update the internal cursor position. To maintain
+    /// an internal state, use [`S3Reader::seek`] and [`S3Reader::read`] instead.
+    ///
+    /// The byte ranges `from` and `to` are both inclusive, see <https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35>
+    ///
+    /// This method also exists as an `async` method: [`S3Reader::read_range`]
+    ///
+    /// # Example
+    /// ```no_run
+    /// use s3reader::S3Reader;
+    /// use s3reader::S3ObjectUri;
+    ///
+    /// let uri = S3ObjectUri::new("s3://my-bucket/path/to/huge/file").unwrap();
+    /// let mut reader = S3Reader::open(uri).unwrap();
+    ///
+    /// let bytes = reader.read_range_sync(100, 249).unwrap().into_bytes();
+    /// assert_eq!(bytes.len(), 150);
+    /// ```
+    pub fn read_range_sync(
+        &mut self,
+        from: u64,
+        to: u64,
+    ) -> Result<aws_sdk_s3::types::AggregatedBytes, S3ReaderError> {
+        Runtime::new().unwrap().block_on(self.read_range(from, to))
     }
 
     /// Fetches the object's header from S3
@@ -240,7 +270,7 @@ impl S3Reader {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&mut self) -> u64 {
         if let Some(header) = &self.header {
-            header.content_length() as u64
+            u64::try_from(header.content_length()).unwrap()
         } else {
             Runtime::new()
                 .unwrap()
@@ -263,8 +293,8 @@ impl Read for S3Reader {
         let end_pos = self.pos + buf.len() as u64;
         let s3_data = Runtime::new()
             .unwrap()
-            .block_on(self.read_range(self.pos, end_pos))?;
-        self.pos = end_pos;
+            .block_on(self.read_range(self.pos, end_pos - 1))?;
+        self.pos += u64::try_from(s3_data.remaining()).unwrap();
         let mut reader = s3_data.reader();
         reader.read(buf)
     }
@@ -278,7 +308,7 @@ impl Read for S3Reader {
             .unwrap()
             .block_on(self.read_range(self.pos, reader_len))?;
 
-        self.pos = reader_len;
+        self.pos += u64::try_from(s3_data.remaining()).unwrap();
         let data_len = s3_data.remaining();
 
         buf.reserve(data_len);
@@ -324,26 +354,12 @@ impl Seek for S3Reader {
 /// unit-tested.
 fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::Error> {
     match pos {
-        SeekFrom::Start(x) => {
-            if x > len {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "cannot seek out of bounds",
-                ));
-            }
-            Ok(x)
-        }
+        SeekFrom::Start(x) => Ok(std::cmp::min(x, len)),
         SeekFrom::Current(x) => match x >= 0 {
             true => {
                 // we can safely cast this to u64, positive i64 will always be smaller
                 let x = x as u64;
-                if (x + cursor) > len {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "cannot seek out of bounds",
-                    ));
-                }
-                Ok(cursor + x)
+                Ok(std::cmp::min(cursor + x, len))
             }
             false => {
                 // we can safely cast this to u64, since abs i64 will always be smaller than u64
@@ -359,10 +375,7 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
         },
         SeekFrom::End(x) => {
             if x > 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "cannot seek out of bounds",
-                ));
+                return Ok(len);
             }
             // we can safely cast this to u64, since abs i64 will always be smaller than u64
             let x = x.unsigned_abs();
@@ -395,7 +408,10 @@ mod tests {
             s3reader_seek(100, 1, std::io::SeekFrom::Start(100)).unwrap(),
             100
         );
-        assert!(s3reader_seek(100, 1, std::io::SeekFrom::Start(101)).is_err());
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Start(120)).unwrap(),
+            100
+        );
     }
 
     #[test]
@@ -424,14 +440,19 @@ mod tests {
             s3reader_seek(100, 0, std::io::SeekFrom::Current(1)).unwrap(),
             1
         );
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::Current(100)).unwrap(),
+            100
+        );
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(-2)).is_err());
-        assert!(s3reader_seek(100, 1, std::io::SeekFrom::Current(100)).is_err());
     }
 
     #[test]
     fn test_seek_from_end() {
-        assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(1)).is_err());
-        assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(-101)).is_err());
+        assert_eq!(
+            s3reader_seek(100, 1, std::io::SeekFrom::End(1)).unwrap(),
+            100
+        );
         assert_eq!(
             s3reader_seek(100, 1, std::io::SeekFrom::End(0)).unwrap(),
             100
@@ -444,5 +465,6 @@ mod tests {
             s3reader_seek(100, 1, std::io::SeekFrom::End(-50)).unwrap(),
             50
         );
+        assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(-101)).is_err());
     }
 }
