@@ -291,10 +291,14 @@ impl Read for S3Reader {
             return Ok(0);
         }
         let end_pos = self.pos + buf.len() as u64;
-        let s3_data = Runtime::new()
-            .unwrap()
-            .block_on(self.read_range(self.pos, end_pos - 1))?;
+
+        // The `read_range` method uses inclusive byte ranges, we exclude the last byte
+        let s3_data = self.read_range_sync(self.pos, end_pos - 1)?;
+
+        // Ensure that the position cursor is only increased by the number of actually read bytes
         self.pos += u64::try_from(s3_data.remaining()).unwrap();
+
+        // Use the Reader provided by `AggregatedBytes` instead of converting manually
         let mut reader = s3_data.reader();
         reader.read(buf)
     }
@@ -304,13 +308,16 @@ impl Read for S3Reader {
     /// more latency so `S3Reader` tries to fetch all data in a single call
     fn read_to_end(&mut self, buf: &mut Vec<u8>) -> Result<usize, std::io::Error> {
         let reader_len = self.len();
-        let s3_data = Runtime::new()
-            .unwrap()
-            .block_on(self.read_range(self.pos, reader_len))?;
 
-        self.pos += u64::try_from(s3_data.remaining()).unwrap();
+        // The `read_range` method uses inclusive byte ranges, we exclude the last byte
+        let s3_data = self.read_range_sync(self.pos, reader_len - 1)?;
+
+        // Ensure that the position cursor is only increased by the number of actually read bytes
         let data_len = s3_data.remaining();
+        self.pos += u64::try_from(data_len).unwrap();
 
+        // We can't rely on the `AggregatedBytes` reader and must iterate the internal bytes buffer
+        // to push individual bytes into the buffer
         buf.reserve(data_len);
         for b in s3_data.into_bytes() {
             buf.push(b);
@@ -322,6 +329,8 @@ impl Read for S3Reader {
     /// reads in 32 bytes blocks that grow over time. However, the IO for S3 has way
     /// more latency so `S3Reader` tries to fetch all data in a single call
     fn read_to_string(&mut self, buf: &mut String) -> Result<usize, std::io::Error> {
+        // Allocate a new vector to utilize `read_to_end`. We don't have to specify the size here
+        // since `read_to_end` will extend the vector to the required capacity
         let mut bytes = Vec::new();
         match self.read_to_end(&mut bytes) {
             Ok(n) => {
@@ -357,8 +366,10 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
         SeekFrom::Start(x) => Ok(std::cmp::min(x, len)),
         SeekFrom::Current(x) => match x >= 0 {
             true => {
-                // we can safely cast this to u64, positive i64 will always be smaller
+                // we can safely cast this to u64, positive i64 will always be smaller and never be truncated
                 let x = x as u64;
+
+                // we can't seek beyond the end of the file
                 Ok(std::cmp::min(cursor + x, len))
             }
             false => {
@@ -374,10 +385,10 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
             }
         },
         SeekFrom::End(x) => {
-            if x > 0 {
+            if x >= 0 {
+                // we can't seek beyond the end of the file
                 return Ok(len);
             }
-            // we can safely cast this to u64, since abs i64 will always be smaller than u64
             let x = x.unsigned_abs();
             if x > len {
                 return Err(std::io::Error::new(
@@ -385,7 +396,7 @@ fn s3reader_seek(len: u64, cursor: u64, pos: SeekFrom) -> Result<u64, std::io::E
                     "position cannot be negative",
                 ));
             };
-            Ok(len - x as u64)
+            Ok(len - x)
         }
     }
 }
