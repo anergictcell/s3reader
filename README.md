@@ -11,7 +11,7 @@ Add this to your `Cargo.toml`:
 
 ```text
 [dependencies]
-s3reader = "0.5.0"
+s3reader = "1.0.0"
 ```
 
 ### Use `BufRead` to read line by line
