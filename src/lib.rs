@@ -1,10 +1,20 @@
 #![doc = include_str!("../README.md")]
 
-use aws_sdk_s3::output::HeadObjectOutput;
 use bytes::Buf;
 use std::io::{Read, Seek, SeekFrom};
 use thiserror::Error;
 use tokio::runtime::Runtime;
+
+
+/// Re-exported types from `aws_sdk_s3` and `aws_types`
+pub mod external_types {
+    pub use aws_types::sdk_config::SdkConfig;
+    pub use aws_sdk_s3::types::SdkError;
+    pub use aws_sdk_s3::types::AggregatedBytes;
+    pub use aws_sdk_s3::output::HeadObjectOutput;
+    pub use aws_sdk_s3::error::GetObjectError;
+    pub use aws_sdk_s3::error::HeadObjectError;
+}
 
 #[derive(Error, Debug)]
 pub enum S3ReaderError {
@@ -20,8 +30,8 @@ pub enum S3ReaderError {
     InvalidRange(u64, u64),
 }
 
-impl From<aws_sdk_s3::types::SdkError<aws_sdk_s3::error::GetObjectError>> for S3ReaderError {
-    fn from(err: aws_sdk_s3::types::SdkError<aws_sdk_s3::error::GetObjectError>) -> S3ReaderError {
+impl From<external_types::SdkError<external_types::GetObjectError>> for S3ReaderError {
+    fn from(err: external_types::SdkError<external_types::GetObjectError>) -> S3ReaderError {
         S3ReaderError::ObjectNotFetched(err.to_string())
     }
 }
@@ -114,10 +124,20 @@ pub struct S3Reader {
     client: aws_sdk_s3::Client,
     uri: S3ObjectUri,
     pos: u64,
-    header: Option<HeadObjectOutput>,
+    header: Option<external_types::HeadObjectOutput>,
 }
 
 impl S3Reader {
+    /// Creates a new `S3Reader` and checks for presence of the S3 object
+    ///
+    /// This is the easiest method to open an S3Reader. Upon creation, it will check if the
+    /// S3 object is actually present and available and will fetch the header. This prevents
+    /// possible runtime errors later on.
+    pub fn from_uri(uri: &str) -> Result<S3Reader, S3ReaderError> {
+        let uri = S3ObjectUri::new(uri)?;
+        S3Reader::open(uri)
+    }
+
     /// Creates a new `S3Reader`.
     ///
     /// This method does not check for presence of an actual object in S3 or for connectivity.
@@ -146,7 +166,7 @@ impl S3Reader {
     ///
     /// This method is useful if you don't want to use the default configbuilder using the environment.
     /// It does not check for correctness, connectivity to the S3 bucket or presence of the S3 object.
-    pub fn from_config(config: &aws_types::sdk_config::SdkConfig, uri: S3ObjectUri) -> S3Reader {
+    pub fn from_config(config: &external_types::SdkConfig, uri: S3ObjectUri) -> S3Reader {
         let client = aws_sdk_s3::Client::new(config);
         S3Reader {
             client,
@@ -183,7 +203,7 @@ impl S3Reader {
         &mut self,
         from: u64,
         to: u64,
-    ) -> Result<aws_sdk_s3::types::AggregatedBytes, S3ReaderError> {
+    ) -> Result<external_types::AggregatedBytes, S3ReaderError> {
         if to < from || from > self.len() {
             return Err(S3ReaderError::InvalidRange(from, to));
         }
@@ -226,7 +246,7 @@ impl S3Reader {
         &mut self,
         from: u64,
         to: u64,
-    ) -> Result<aws_sdk_s3::types::AggregatedBytes, S3ReaderError> {
+    ) -> Result<external_types::AggregatedBytes, S3ReaderError> {
         Runtime::new().unwrap().block_on(self.read_range(from, to))
     }
 
@@ -250,7 +270,7 @@ impl S3Reader {
     /// ```
     pub async fn fetch_header(
         &mut self,
-    ) -> Result<(), aws_sdk_s3::types::SdkError<aws_sdk_s3::error::HeadObjectError>> {
+    ) -> Result<(), external_types::SdkError<external_types::HeadObjectError>> {
         let header = self
             .client
             .head_object()
