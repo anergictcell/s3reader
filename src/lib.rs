@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+use aws_config::BehaviorVersion;
 use bytes::Buf;
 use std::io::{Read, Seek, SeekFrom};
 use thiserror::Error;
@@ -7,14 +8,9 @@ use tokio::runtime::Runtime;
 
 
 /// Re-exported types from `aws_sdk_s3` and `aws_types`
-pub mod external_types {
-    pub use aws_types::sdk_config::SdkConfig;
-    pub use aws_sdk_s3::types::SdkError;
-    pub use aws_sdk_s3::types::AggregatedBytes;
-    pub use aws_sdk_s3::output::HeadObjectOutput;
-    pub use aws_sdk_s3::error::GetObjectError;
-    pub use aws_sdk_s3::error::HeadObjectError;
-}
+pub mod external_types;
+mod metadata;
+
 
 #[derive(Error, Debug)]
 pub enum S3ReaderError {
@@ -145,7 +141,7 @@ impl S3Reader {
     pub fn new(uri: S3ObjectUri) -> S3Reader {
         let config = Runtime::new()
             .unwrap()
-            .block_on(aws_config::load_from_env());
+            .block_on(aws_config::load_defaults(BehaviorVersion::latest()));
         S3Reader::from_config(&config, uri)
     }
 
@@ -290,7 +286,7 @@ impl S3Reader {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&mut self) -> u64 {
         if let Some(header) = &self.header {
-            u64::try_from(header.content_length()).unwrap()
+            u64::try_from(header.content_length().unwrap()).unwrap()
         } else {
             Runtime::new()
                 .unwrap()
