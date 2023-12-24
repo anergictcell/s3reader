@@ -1,6 +1,6 @@
 [package]
 name = "s3reader"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["Jonas Marcello <jonas.marcello@esbme.com>"]
 description = "Read S3 object like local files with byte offsets"
