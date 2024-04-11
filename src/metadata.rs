@@ -2,7 +2,6 @@
 
 use crate::external_types;
 
-
 struct FileType {}
 impl FileType {
     pub fn is_dir(&self) -> bool {
@@ -21,7 +20,6 @@ impl FileType {
     }
 }
 
-
 struct Permissions {}
 impl Permissions {
     pub fn readonly(&self) -> bool {
@@ -30,7 +28,7 @@ impl Permissions {
 }
 
 struct Metadata {
-    s3_head: external_types::HeadObjectOutput
+    s3_head: external_types::HeadObjectOutput,
 }
 
 impl Metadata {

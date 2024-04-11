@@ -6,11 +6,9 @@ use std::io::{Read, Seek, SeekFrom};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 
-
 /// Re-exported types from `aws_sdk_s3` and `aws_types`
 pub mod external_types;
 mod metadata;
-
 
 #[derive(Error, Debug)]
 pub enum S3ReaderError {
@@ -61,7 +59,7 @@ impl S3ObjectUri {
         if &uri[0..5] != "s3://" {
             return Err(S3ReaderError::MissingS3Protocol);
         }
-        if let Some(idx) = uri[5..].find(&['/']) {
+        if let Some(idx) = uri[5..].find('/') {
             Ok(S3ObjectUri {
                 bucket: uri[5..idx + 5].to_string(),
                 key: uri[idx + 6..].to_string(),
@@ -155,6 +153,20 @@ impl S3Reader {
         match Runtime::new().unwrap().block_on(reader.fetch_header()) {
             Err(err) => Err(S3ReaderError::ObjectNotFetched(err.to_string())),
             Ok(_) => Ok(reader),
+        }
+    }
+
+    /// Creates a new `S3Reader` with a custom AWS S3 `aws_sdk_s3::Config`
+    ///
+    /// This method is useful if you don't want to use the default configbuilder using the environment.
+    /// It does not check for correctness, connectivity to the S3 bucket or presence of the S3 object.
+    pub fn from_s3_config(config: aws_sdk_s3::Config, uri: S3ObjectUri) -> S3Reader {
+        let client = aws_sdk_s3::Client::from_conf(config);
+        S3Reader {
+            client,
+            uri,
+            pos: 0,
+            header: None,
         }
     }
 
