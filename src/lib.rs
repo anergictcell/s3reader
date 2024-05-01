@@ -56,16 +56,17 @@ impl S3ObjectUri {
     /// assert_eq!(uri.key() , "path/to/file.xls");
     /// ```
     pub fn new(uri: &str) -> Result<S3ObjectUri, S3ReaderError> {
-        if &uri[0..5] != "s3://" {
-            return Err(S3ReaderError::MissingS3Protocol);
-        }
-        if let Some(idx) = uri[5..].find('/') {
-            Ok(S3ObjectUri {
-                bucket: uri[5..idx + 5].to_string(),
-                key: uri[idx + 6..].to_string(),
-            })
+        if let Some(uri) = uri.strip_prefix("s3://") {
+            if let Some(idx) = uri.find('/') {
+                Ok(S3ObjectUri {
+                    bucket: uri[0..idx].to_string(),
+                    key: uri[idx + 1..].to_string(),
+                })
+            } else {
+                Err(S3ReaderError::MissingObjectUri)
+            }
         } else {
-            Err(S3ReaderError::MissingObjectUri)
+            Err(S3ReaderError::MissingS3Protocol)
         }
     }
 
@@ -505,5 +506,37 @@ mod tests {
             50
         );
         assert!(s3reader_seek(100, 1, std::io::SeekFrom::End(-101)).is_err());
+    }
+
+    #[test]
+    fn test_uri_parser() {
+        let uri = S3ObjectUri::new("s3://mybucket/path/to/file.xls").unwrap();
+        assert_eq!(uri.bucket() , "mybucket");
+        assert_eq!(uri.key() , "path/to/file.xls");
+    }
+
+    #[test]
+    fn test_uri_without_protocol() {
+        assert!(S3ObjectUri::new("mybucket/path/to/file.xls").is_err());
+    }
+
+    #[test]
+    fn test_uri_with_wrong_protocol() {
+        assert!(S3ObjectUri::new("s5://mybucket/path/to/file.xls").is_err());
+        assert!(S3ObjectUri::new("s3//mybucket/path/to/file.xls").is_err());
+        assert!(S3ObjectUri::new("s3:/mybucket/path/to/file.xls").is_err());
+    }
+
+    #[test]
+    fn test_uri_with_missing_bucket() {
+        assert!(S3ObjectUri::new("s3://").is_err());
+        assert!(S3ObjectUri::new("s3://foobar").is_err());
+    }
+
+    #[test]
+    fn test_valid_uris() {
+        assert!(S3ObjectUri::new("s3://foobar/somethinglong").is_ok());
+        assert!(S3ObjectUri::new("s3://f/5").is_ok());
+        assert!(S3ObjectUri::new("s3://foobar/s/o/m/e/t/h/i/n/g/l/o/n/g").is_ok());
     }
 }
